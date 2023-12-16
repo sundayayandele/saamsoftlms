@@ -2,4 +2,4 @@
 deployment:
   tasks:
     - export DEPLOYPATH=/home/saamsoft/public_html/
-    - /bin/cp -R moodle $DEPLOYPATH
+    - /bin/cp -R saamsoftlms $DEPLOYPATH
