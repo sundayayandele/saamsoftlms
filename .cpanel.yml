@@ -1,5 +1,8 @@
----
 deployment:
   tasks:
-    - export DEPLOYPATH=/home/saamsoft/public_html/
-    - /bin/cp -R saamsoftlms $DEPLOYPATH
+    - export DEPLOYPATH=/home/saamsoft/public_html   # Replace USERNAME with your cPanel username
+    - /bin/cp -R * $DEPLOYPATH
+    - /bin/rm -rf $DEPLOYPATH/moodle/.git   # Remove the Git repository files
+    - /bin/mv $DEPLOYPATH/moodle/* $DEPLOYPATH   # Move Moodle files to the root
+    - /bin/rm -rf $DEPLOYPATH/moodle   # Remove the Moodle directory
+    - /usr/local/bin/php /usr/local/cpanel/bin/manage_plugins install --user=saamsoft --install-destination=/home/saamsoft --namespace=CPANEL_MOODLE
