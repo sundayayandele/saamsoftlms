@@ -4,9 +4,8 @@ import {
   Modal,
   PrimaryButton,
   SecondaryButton,
-  Snackbar,
-  SnackbarStack,
   sortAddonItems,
+  useSnackbar,
 } from '@moodlenet/component-library'
 import type { AssetInfoForm } from '@moodlenet/component-library/common'
 import { DateField, DropdownField, LicenseField } from '@moodlenet/ed-meta/ui'
@@ -38,6 +37,7 @@ import { MainResourceCard } from '../../organisms/MainResourceCard/MainResourceC
 import './Resource.scss'
 
 export type ResourceProps = {
+  isCreating: boolean
   saveState: SaveState
   mainLayoutProps: MainLayoutProps
   mainResourceCardSlots: MainResourceCardSlots
@@ -62,6 +62,7 @@ export type ResourceProps = {
 }
 
 export const Resource: FC<ResourceProps> = ({
+  isCreating,
   mainLayoutProps,
   resourceContributorCardProps,
 
@@ -84,8 +85,7 @@ export const Resource: FC<ResourceProps> = ({
 
   fileMaxSize,
   validationSchemas: {
-    draftContentValidationSchema,
-    publishedContentValidationSchema,
+    contentValidationSchema,
     draftResourceValidationSchema,
     imageValidationSchema,
     publishedResourceValidationSchema,
@@ -98,12 +98,13 @@ export const Resource: FC<ResourceProps> = ({
     deleteResource,
     publish,
     unpublish: setUnpublish,
-    setContent,
+    provideContent: setContent,
     setImage,
+    startAutofill,
   } = actions
   const { canPublish, canEdit } = access
-  const { isPublished } = state
-  const { content: isSavingContent, image: isSavingImage } = saveState
+  const { isPublished, uploadProgress, autofillState } = state
+  const { image: isSavingImage } = saveState
   const {
     languageOptions,
     levelOptions,
@@ -140,7 +141,11 @@ export const Resource: FC<ResourceProps> = ({
     'idle',
   )
   const [showUnpublishSuccess, setShowUnpublishSuccess] = useState<boolean>(false)
-  const [isEditing, setIsEditing] = useState<boolean>(emptyOnStart)
+  const [isEditing, setIsEditing] = useState<boolean>(
+    emptyOnStart ||
+      (!!uploadProgress && uploadProgress !== 'N/A' && uploadProgress >= 0) ||
+      autofillState !== undefined, // || !(autofillState === undefined || autofillState === 'ai-saved-generated-data'),
+  )
 
   const prevIsPublishedRef = useRef(isPublished)
 
@@ -162,25 +167,34 @@ export const Resource: FC<ResourceProps> = ({
     validationSchema: isPublishValidating
       ? publishedResourceValidationSchema
       : draftResourceValidationSchema,
-    onSubmit: editData,
+    onSubmit(meta) {
+      return editData(meta)
+    },
   })
+
   const isPublishedFormValid = publishedResourceValidationSchema.isValidSync(form.values)
   const isDraftFormValid = draftResourceValidationSchema.isValidSync(form.values)
 
-  const contentForm = useFormik<{ content: File | string | undefined | null }>({
-    initialValues: useMemo(() => ({ content: contentUrl }), [contentUrl]),
+  const form_setValues = form.setValues
+  const prevResourceFormRef = useRef(resourceForm)
+  useEffect(() => {
+    if (prevResourceFormRef.current !== resourceForm) {
+      form_setValues(resourceForm)
+    }
+    prevResourceFormRef.current = resourceForm
+  }, [form_setValues, resourceForm])
+
+  const contentForm = useFormik<{ content: File | string }>({
+    initialValues: useMemo(() => ({ content: contentUrl ?? '' }), [contentUrl]),
     validateOnMount: true,
     validateOnChange: true,
     enableReinitialize: true,
-    validationSchema: isPublishValidating
-      ? publishedContentValidationSchema
-      : draftContentValidationSchema,
+    validationSchema: contentValidationSchema,
     onSubmit: values => {
       return setContent(values.content)
     },
   })
-  const isPublishedContentValid = publishedContentValidationSchema.isValidSync(contentForm.values)
-  const isDraftContentValid = draftContentValidationSchema.isValidSync(contentForm.values)
+  const isContentValid = contentValidationSchema.isValidSync(contentForm.values)
 
   const imageForm = useFormik<{ image: AssetInfoForm | undefined | null }>({
     initialValues: useMemo(() => ({ image: image }), [image]),
@@ -217,7 +231,34 @@ export const Resource: FC<ResourceProps> = ({
     imageForm_setTouched({ image: true })
   }, [contentForm_setTouched, form_setTouched, imageForm_setTouched])
 
-  const contributorCard = isPublished && (
+  useEffect(() => {
+    if (autofillState === 'ai-completed') {
+      setFieldsAsTouched()
+    }
+  }, [autofillState, setFieldsAsTouched])
+
+  const hasAllData =
+    typeof form.values.title === 'string' &&
+    form.values.title !== '' &&
+    typeof form.values.description === 'string' &&
+    form.values.description !== '' &&
+    // !image &&
+    typeof contentUrl === 'string' &&
+    typeof form.values.type === 'string' &&
+    typeof form.values.language === 'string' &&
+    typeof form.values.license === 'string' &&
+    typeof form.values.level === 'string' &&
+    typeof form.values.subject === 'string' &&
+    typeof form.values.year === 'string' &&
+    typeof form.values.month === 'string' &&
+    form.values.learningOutcomes.length > 0
+
+  const disableFields =
+    !contentForm.values.content ||
+    uploadProgress !== undefined ||
+    (autofillState !== undefined && autofillState !== 'ai-completed')
+
+  const contributorCard = !isCreating && (
     <ResourceContributorCard {...resourceContributorCardProps} key="contributor-card" />
   )
 
@@ -246,7 +287,7 @@ export const Resource: FC<ResourceProps> = ({
   const applyCheckFormsAndPublish = useCallback(() => {
     setFieldsAsTouched()
 
-    if (isPublishedFormValid && isPublishedContentValid) {
+    if (isPublishedFormValid && isContentValid) {
       form_validateForm()
       contentForm_validateForm()
       setShouldShowErrors(false)
@@ -259,7 +300,7 @@ export const Resource: FC<ResourceProps> = ({
   }, [
     contentForm_validateForm,
     form_validateForm,
-    isPublishedContentValid,
+    isContentValid,
     isPublishedFormValid,
     publish,
     setFieldsAsTouched,
@@ -289,7 +330,7 @@ export const Resource: FC<ResourceProps> = ({
   const applyPublishCheck = useCallback(() => {
     setFieldsAsTouched()
 
-    if (isPublishedFormValid && isPublishedContentValid) {
+    if (isPublishedFormValid && isContentValid) {
       setShowCheckPublishSuccess('success')
       setShouldShowErrors(false)
     } else {
@@ -301,7 +342,7 @@ export const Resource: FC<ResourceProps> = ({
   }, [
     contentForm_validateForm,
     form_validateForm,
-    isPublishedContentValid,
+    isContentValid,
     isPublishedFormValid,
     setFieldsAsTouched,
   ])
@@ -328,8 +369,7 @@ export const Resource: FC<ResourceProps> = ({
   const areFormsValid: ValidForms = {
     isDraftFormValid: isDraftFormValid,
     isPublishedFormValid: isPublishedFormValid,
-    isDraftContentValid: isDraftContentValid,
-    isPublishedContentValid: isPublishedContentValid,
+    isContentValid: isContentValid,
     isImageValid: isImageValid,
   }
 
@@ -354,6 +394,8 @@ export const Resource: FC<ResourceProps> = ({
       setIsPublishValidating={setIsPublishValidating}
       emptyOnStart={emptyOnStart}
       setEmptyOnStart={setEmptyOnStart}
+      disableFields={disableFields}
+      hasAllData={hasAllData}
       areFormsValid={areFormsValid}
       setShouldShowErrors={setShouldShowErrors}
       shouldShowErrors={shouldShowErrors}
@@ -375,11 +417,31 @@ export const Resource: FC<ResourceProps> = ({
         }
       : null
 
-  const publishCheckButton = isEditing && canPublish && !isPublished && (
-    <PrimaryButton onClick={publishCheck} color="green">
-      Publish check
-    </PrimaryButton>
-  )
+  const autofillButton: AddonItem | null =
+    isEditing && !hasAllData && !disableFields
+      ? {
+          Item: () => (
+            <PrimaryButton onClick={startAutofill} color="green">
+              Autofill missing fields
+            </PrimaryButton>
+          ),
+          key: 'autofill-button',
+          position: 0,
+        }
+      : null
+
+  const publishCheckButton: AddonItem | null =
+    isEditing && /* canPublish && */ !isPublished && (hasAllData || disableFields)
+      ? {
+          Item: () => (
+            <PrimaryButton onClick={publishCheck} color="green" disabled={disableFields}>
+              Publish check
+            </PrimaryButton>
+          ),
+          key: 'publish-check-button',
+          position: 0,
+        }
+      : null
 
   const unpublishButton: AddonItem | null =
     canPublish && isPublished
@@ -397,6 +459,7 @@ export const Resource: FC<ResourceProps> = ({
   const subjectField = (isEditing || canEdit) && (
     <DropdownField
       key="subject-field"
+      disabled={disableFields}
       title="Subject"
       placeholder="Content category"
       canEdit={canEdit && isEditing}
@@ -411,6 +474,7 @@ export const Resource: FC<ResourceProps> = ({
   const licenseField = (
     <LicenseField
       key="license-field"
+      disabled={disableFields}
       canEdit={canEdit && isEditing}
       license={form.values.license}
       licenseOptions={licenseOptions}
@@ -425,6 +489,7 @@ export const Resource: FC<ResourceProps> = ({
   const typeField = (
     <DropdownField
       key="type-field"
+      disabled={disableFields}
       title="Type"
       placeholder="Content type"
       canEdit={canEdit && isEditing}
@@ -441,6 +506,7 @@ export const Resource: FC<ResourceProps> = ({
   const levelField = (
     <DropdownField
       key="level-field"
+      disabled={disableFields}
       title="Level"
       placeholder="Education level"
       canEdit={canEdit && isEditing}
@@ -457,6 +523,7 @@ export const Resource: FC<ResourceProps> = ({
   const dateField = (
     <DateField
       key="date-field"
+      disabled={disableFields}
       canEdit={canEdit && isEditing}
       month={form.values.month}
       monthOptions={monthOptions}
@@ -477,6 +544,7 @@ export const Resource: FC<ResourceProps> = ({
   const languageField = (
     <DropdownField
       key="language-field"
+      disabled={disableFields}
       title="Language"
       placeholder="Content language"
       canEdit={canEdit && isEditing}
@@ -521,12 +589,12 @@ export const Resource: FC<ResourceProps> = ({
   const downloadButton =
     contentType === 'file' && contentUrl && contentForm.values.content ? (
       <a
-        href={contentUrl ?? undefined}
+        href={contentUrl && !disableFields ? contentUrl : undefined}
         target="_blank"
         rel="noreferrer"
         download={downloadFilename}
       >
-        <SecondaryButton key="download-or-open-link-button">
+        <SecondaryButton key="download-or-open-link-button" disabled={disableFields}>
           <InsertDriveFile />
           Download file
         </SecondaryButton>
@@ -535,8 +603,12 @@ export const Resource: FC<ResourceProps> = ({
 
   const openLinkButton =
     contentType === 'link' && contentUrl && contentForm.values.content ? (
-      <a href={contentUrl ?? undefined} target="_blank" rel="noreferrer">
-        <SecondaryButton key="download-or-open-link-button">
+      <a
+        href={contentUrl && !disableFields ? contentUrl : undefined}
+        target="_blank"
+        rel="noreferrer"
+      >
+        <SecondaryButton key="download-or-open-link-button" disabled={disableFields}>
           <Link />
           Open link
         </SecondaryButton>
@@ -545,6 +617,7 @@ export const Resource: FC<ResourceProps> = ({
 
   const updatedGeneralActionsItems = sortAddonItems([
     publishButton,
+    autofillButton,
     publishCheckButton,
     unpublishButton,
     ...(generalActionsItems ?? []),
@@ -552,11 +625,12 @@ export const Resource: FC<ResourceProps> = ({
     openLinkButton,
   ])
 
-  const generalActionsContainer = (
-    <Card className="resource-action-card" hideBorderWhenSmall={true} key="resource-action-card">
-      {updatedGeneralActionsItems.map(i => ('Item' in i ? <i.Item key={i.key} /> : i))}
-    </Card>
-  )
+  const generalActionsContainer =
+    updatedGeneralActionsItems.length > 0 ? (
+      <Card className="resource-action-card" hideBorderWhenSmall={true} key="resource-action-card">
+        {updatedGeneralActionsItems.map(i => ('Item' in i ? <i.Item key={i.key} /> : i))}
+      </Card>
+    ) : null
 
   const updatedWideColumnItems = [
     !viewport.screen.big && mainResourceCard,
@@ -577,67 +651,85 @@ export const Resource: FC<ResourceProps> = ({
     ...(rightColumnItems ?? []),
   ].filter((item): item is AddonItem | JSX.Element => !!item)
 
-  const isSavingSnackbar =
-    (typeof contentForm.values.content !== 'string' && isSavingContent === 'saving') ||
-    isSavingImage === 'saving' ? (
-      <Snackbar
-        position="bottom"
-        type="info"
-        waitDuration={1500}
-        showCloseButton={false}
-        autoHideDuration={3000}
-      >
-        {`Content uploading, please don't close the tab`}
-      </Snackbar>
-    ) : null
+  const { addSnackbar } = useSnackbar()
 
-  const checkPublishSnackbar =
-    showCheckPublishSuccess !== 'idle' ? (
-      <Snackbar
-        position="bottom"
-        type={showCheckPublishSuccess === 'success' ? 'success' : 'error'}
-        autoHideDuration={3000}
-        showCloseButton={false}
-        onClose={() => setShowCheckPublishSuccess('idle')}
-      >
-        {showCheckPublishSuccess === 'success'
-          ? `Success, save before publishing`
-          : `Failed, fix the errors and try again`}
-      </Snackbar>
-    ) : null
+  const showUploadingSnackbar = uploadProgress !== undefined || isSavingImage === 'saving'
 
-  const publishSnackbar =
-    showPublishSuccess !== 'idle' ? (
-      <Snackbar
-        position="bottom"
-        type={showPublishSuccess === 'success' ? 'success' : 'error'}
-        autoHideDuration={3000}
-        showCloseButton={false}
-        onClose={() => setShowPublishSuccess('idle')}
-      >
-        {showPublishSuccess === 'success'
-          ? `Resource published`
-          : `Failed, fix the errors and try again`}
-      </Snackbar>
-    ) : null
+  useEffect(() => {
+    let timeoutId: NodeJS.Timeout
+    if (showUploadingSnackbar) {
+      timeoutId = setTimeout(() => {
+        addSnackbar({
+          position: 'bottom',
+          autoHideDuration: 6000,
+          children:
+            "Uploading file, feel free to move around the platform, just don't close this tab",
+        })
+      }, 4000)
+    }
+    return () => {
+      clearTimeout(timeoutId)
+    }
+  }, [showUploadingSnackbar, addSnackbar])
 
-  const unpublishSnackbar = showUnpublishSuccess ? (
-    <Snackbar
-      position="bottom"
-      type="success"
-      autoHideDuration={3000}
-      showCloseButton={false}
-      onClose={() => setShowUnpublishSuccess(false)}
-    >
-      {`Resource unpublished`}
-    </Snackbar>
-  ) : null
+  useEffect(() => {
+    if (autofillState === 'ai-generation') {
+      addSnackbar({
+        autoHideDuration: 6000,
+        children: `Using AI to autofill the resource details, it usually takes a couple of minutes`,
+      })
+    } else if (autofillState === 'ai-completed') {
+      addSnackbar({
+        autoHideDuration: 6000,
+        type: 'success',
+        children: `Resource ready! Verify and edit any required details`,
+      })
+    } else if (autofillState === 'ai-error') {
+      addSnackbar({
+        autoHideDuration: 6000,
+        children: `Unfortunatelly we couldn't complete AI autofill`,
+      })
+    }
+  }, [addSnackbar, autofillState])
 
-  const snackbars = (
-    <SnackbarStack
-      snackbarList={[isSavingSnackbar, checkPublishSnackbar, publishSnackbar, unpublishSnackbar]}
-    />
-  )
+  useEffect(() => {
+    if (showCheckPublishSuccess !== 'idle') {
+      addSnackbar({
+        autoHideDuration: 4000,
+        type: showCheckPublishSuccess === 'success' ? 'success' : 'error',
+        children:
+          showCheckPublishSuccess === 'success'
+            ? `Success, save before publishing`
+            : `Failed, fix the errors and try again`,
+        onClose: () => setShowCheckPublishSuccess('idle'),
+      })
+    }
+  }, [addSnackbar, showCheckPublishSuccess])
+
+  useEffect(() => {
+    if (showPublishSuccess !== 'idle') {
+      addSnackbar({
+        type: showPublishSuccess === 'success' ? 'success' : 'error',
+        autoHideDuration: 4000,
+        children:
+          showPublishSuccess === 'success'
+            ? `Resource published`
+            : `Failed, fix the errors and try again`,
+        onClose: () => setShowPublishSuccess('idle'),
+      })
+    }
+  }, [addSnackbar, showPublishSuccess])
+
+  useEffect(() => {
+    if (showUnpublishSuccess) {
+      addSnackbar({
+        type: 'success',
+        autoHideDuration: 4000,
+        children: 'Resource unpublished',
+        onClose: () => setShowUnpublishSuccess(false),
+      })
+    }
+  }, [addSnackbar, showUnpublishSuccess])
 
   const modals = (
     <>
@@ -667,7 +759,6 @@ export const Resource: FC<ResourceProps> = ({
   return (
     <MainLayout {...mainLayoutProps}>
       {modals}
-      {snackbars}
       <div className="resource">
         <div className="content">
           {updatedWideColumnItems.length > 0 && (

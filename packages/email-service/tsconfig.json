@@ -9,6 +9,15 @@
       "path": "../core"
     },
     {
+      "path": "../component-library"
+    },
+    {
+      "path": "../organization"
+    },
+    {
+      "path": "../react-app"
+    },
+    {
       "path": "../key-value-store"
     }
   ]

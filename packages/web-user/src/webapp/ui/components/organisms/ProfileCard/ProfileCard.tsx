@@ -4,6 +4,7 @@ import type { OverallCardProps } from '@moodlenet/react-app/ui'
 import { Link, OverallCard, withProxy } from '@moodlenet/react-app/ui'
 import type { ProfileCardData } from '../../../../../common/profile/type.mjs'
 import type { ProfileAccess, ProfileActions, ProfileState } from '../../../../../common/types.mjs'
+import { getUserLevelDetails } from '../../../../gamification/user-levels.mjs'
 import defaultAvatar from '../../../assets/img/default-avatar.svg'
 import defaultBackground from '../../../assets/img/default-background.svg'
 import { FollowButton } from '../../atoms/FollowButton/FollowButton.js'
@@ -37,6 +38,7 @@ export const ProfileCard = withProxy<ProfileCardProps>(
       avatarUrl,
       displayName,
       profileHref,
+      points,
       // organizationName,
     } = data
     // const { followed } = state
@@ -85,6 +87,13 @@ export const ProfileCard = withProxy<ProfileCardProps>(
       (item): item is AddonItem | JSX.Element => !!item,
     )
 
+    const { avatar, level, title } = getUserLevelDetails(points)
+    const levelAvatar = (
+      <abbr className={`level-avatar level-${level}`} title={`Level ${level} - ${title}`}>
+        <img className="avatar" src={avatar} alt="level avatar" />
+      </abbr>
+    )
+
     return (
       <Card
         className={`profile-card 
@@ -97,6 +106,7 @@ export const ProfileCard = withProxy<ProfileCardProps>(
           <div className="images">
             <img className="background" src={backgroundUrl || defaultBackground} alt="Background" />
             <div className="avatar">
+              {levelAvatar}
               <img src={avatarUrl || defaultAvatar} alt="Avatar" />
             </div>
           </div>

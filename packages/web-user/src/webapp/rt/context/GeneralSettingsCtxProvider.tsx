@@ -19,9 +19,9 @@ const ProvideAdminSettingsContext: FC<PropsWithChildren<unknown>> = ({ children 
 
   const [devMode, toggleDevMode] = useReducer(prev => !prev, false)
 
-  const updateAllPackages = useCallback(async () => {
-    await shell.rpc.me('webapp/admin/packages/update-all-pkgs')()
-  }, [])
+  // const updateAllPackages = useCallback(async () => {
+  //   await shell.rpc.me('webapp/admin/packages/update-all-pkgs')()
+  // }, [])
   useEffect(() => {
     shell.rpc
       .me('webapp/react-app/get-appearance')()
@@ -34,27 +34,31 @@ const ProvideAdminSettingsContext: FC<PropsWithChildren<unknown>> = ({ children 
       appearanceData,
       devMode,
       toggleDevMode,
-      updateAllPackages,
+      // updateAllPackages,
     }
-  }, [updateAllPackages, saveAppearanceData, appearanceData, devMode])
+  }, [/* updateAllPackages, */ saveAppearanceData, appearanceData, devMode])
 
   return <AdminSettingsCtx.Provider value={ctx}>{children}</AdminSettingsCtx.Provider>
 }
-const EmptyOrganizationData = {
+const EmptyOrganizationData: OrganizationData = {
   instanceName: '',
   landingTitle: '',
   landingSubtitle: '',
-  smallLogo: '',
-  logo: '',
+  copyright: '',
+  locationAddress: '',
+  locationUrl: '',
 }
 const ProvideOrganizationContext: FC<PropsWithChildren<unknown>> = ({ children }) => {
-  const [organizationData, setDataOrg] = useState<OrganizationData>(EmptyOrganizationData)
+  const [organizationData, setDataOrg] = useState<{
+    data: OrganizationData
+    rawData: OrganizationData
+  }>({ rawData: EmptyOrganizationData, data: EmptyOrganizationData })
 
   const saveOrganization = useCallback(
     // WE CAN NOT USE IT IS CALLED 1 TIME ONLY
-    (data: OrganizationData) => {
-      shell.rpc.me('webapp/admin/general/set-org-data')({ orgData: data })
-      setDataOrg(data)
+    async (rawData: OrganizationData) => {
+      const respData = await shell.rpc.me('webapp/admin/general/set-org-data')({ rawData })
+      setDataOrg(respData)
     },
     [],
   )
@@ -62,12 +66,12 @@ const ProvideOrganizationContext: FC<PropsWithChildren<unknown>> = ({ children }
   useEffect(() => {
     shell.rpc
       .me('webapp/react-app/get-org-data')()
-      .then(({ data: orgData }: { data: OrganizationData }) => setDataOrg(orgData))
+      .then(resp => setDataOrg(resp))
   }, [])
 
   const ctx: TOrganizationCtx = {
     saveOrganization,
-    organizationData,
+    organization: organizationData,
   }
 
   return <OrganizationCtx.Provider value={ctx}>{children}</OrganizationCtx.Provider>

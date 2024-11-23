@@ -10,7 +10,7 @@ import {
   SnackbarStack,
   useImageUrl,
 } from '@moodlenet/component-library'
-import { Edit, Save } from '@mui/icons-material'
+import { Edit, Flag, Save } from '@mui/icons-material'
 import { useFormik } from 'formik'
 
 import { Share } from '@mui/icons-material'
@@ -32,6 +32,7 @@ import defaultAvatar from '../../../assets/img/default-avatar.svg'
 import type { ValidationSchemas } from '../../../../../common/validationSchema.mjs'
 import { ApprovalButton } from '../../atoms/ApproveButton/ApproveButton.js'
 import { FollowButton } from '../../atoms/FollowButton/FollowButton.js'
+import ReportProfile from '../../molecules/ReportProfile/ReportProfile.js'
 import './MainProfileCard.scss'
 
 export type MainProfileCardSlots = {
@@ -72,16 +73,11 @@ export const MainProfileCard: FC<MainProfileCardProps> = ({
   toggleIsEditing,
 }) => {
   const { mainColumnItems, topItems, titleItems, subtitleItems, footerItems } = slots
-  const { avatarUrl, backgroundUrl } = data
-  const {
-    canEdit,
-    isCreator,
-    isAuthenticated,
-    canFollow,
-    // canApprove
-  } = access
+  const { avatarUrl, backgroundUrl, reportOptions } = data
+  const { canEdit, isCreator, isAuthenticated, canFollow, canApprove } = access
   const {
     followed,
+
     // isPublisher,
     // isElegibleForApproval,
     // isWaitingApproval,
@@ -92,6 +88,7 @@ export const MainProfileCard: FC<MainProfileCardProps> = ({
     sendMessage,
     setAvatar,
     setBackground,
+    reportProfile,
     // approveUser,
     // requestApproval,
     // unapproveUser,
@@ -108,6 +105,8 @@ export const MainProfileCard: FC<MainProfileCardProps> = ({
   const [shouldShowMessageErrors, setShouldShowMessageErrors] = useState<boolean>(false)
   const [isShowingSmallCard, setIsShowingSmallCard] = useState<boolean>(false)
   const [isSendingMessage, setIsSendingMessage] = useState<boolean>(false)
+  const [isReporting, setIsReporting] = useState<boolean>(false)
+  const [showReportedAlert, setShowReportedAlert] = useState<boolean>(false)
   const [showUrlCopiedAlert, setShowUrlCopiedAlert] = useState<boolean>(false)
   const [showMessageSentAlert, setShowMessageSentAlert] = useState<boolean>(false)
 
@@ -294,7 +293,7 @@ export const MainProfileCard: FC<MainProfileCardProps> = ({
       <InputTextField
         className="underline"
         placeholder="Location"
-        value={form.values.location}
+        value={form.values.location ?? undefined}
         onChange={form.handleChange}
         noBorder
         name="location"
@@ -311,7 +310,7 @@ export const MainProfileCard: FC<MainProfileCardProps> = ({
     <span key="edit-site-url">
       <InputTextField
         className="underline"
-        value={form.values.siteUrl}
+        value={form.values.siteUrl ?? undefined}
         onChange={form.handleChange}
         noBorder
         placeholder="Website"
@@ -456,6 +455,16 @@ export const MainProfileCard: FC<MainProfileCardProps> = ({
           />
         </Modal>
       )}
+      {isReporting && (
+        <ReportProfile
+          // reportForm={reportForm}
+          // title={`Confirm reporting this pro`}
+          reportProfile={reportProfile}
+          reportOptions={reportOptions}
+          setIsReporting={setIsReporting}
+          setShowReportedAlert={setShowReportedAlert}
+        />
+      )}
     </>
   )
 
@@ -466,30 +475,43 @@ export const MainProfileCard: FC<MainProfileCardProps> = ({
           <Snackbar
             type="success"
             position="bottom"
-            autoHideDuration={3000}
+            autoHideDuration={4000}
             showCloseButton={false}
+            onClose={() => setShowUrlCopiedAlert(false)}
           >
-            Copied to clipoard
+            Link copied to clipoard
           </Snackbar>
         ) : null,
         showMessageSentAlert ? (
           <Snackbar
             type="success"
             position="bottom"
-            autoHideDuration={3000}
+            autoHideDuration={4000}
             showCloseButton={false}
+            onClose={() => setShowMessageSentAlert(false)}
           >
             Message sent
           </Snackbar>
         ) : null,
         avatarForm.errors.image ? (
-          <Snackbar type="error" position="bottom" autoHideDuration={3000} showCloseButton={false}>
+          <Snackbar type="error" position="bottom" autoHideDuration={4000} showCloseButton={false}>
             {avatarForm.errors.image}
           </Snackbar>
         ) : null,
         backgroundForm.errors.image ? (
-          <Snackbar type="error" position="bottom" autoHideDuration={3000} showCloseButton={false}>
+          <Snackbar type="error" position="bottom" autoHideDuration={4000} showCloseButton={false}>
             {backgroundForm.errors.image}
+          </Snackbar>
+        ) : null,
+        showReportedAlert ? (
+          <Snackbar
+            type="success"
+            position="bottom"
+            autoHideDuration={4000}
+            showCloseButton={false}
+            onClose={() => setShowReportedAlert(false)}
+          >
+            Profile reported
           </Snackbar>
         ) : null,
       ]}
@@ -537,6 +559,20 @@ export const MainProfileCard: FC<MainProfileCardProps> = ({
             </div>
           ),
         },
+        {
+          Element: (
+            <abbr
+              className={`report-button ${isAuthenticated ? '' : 'disabled'}`}
+              key="share-button"
+              tabIndex={0}
+              title={!isAuthenticated ? 'Login or signup to report' : undefined}
+              onClick={() => isAuthenticated && setIsReporting(true)}
+            >
+              <Flag />
+              Report
+            </abbr>
+          ),
+        },
 
         // !isCreator && <div tabIndex={0} onClick={() => setIsReporting(true)}>
         //   <FlagIcon />
@@ -557,9 +593,9 @@ export const MainProfileCard: FC<MainProfileCardProps> = ({
     />
   ) : null
 
-  const approvalButton = (
+  const approvalButton = canApprove ? (
     <ApprovalButton access={access} state={state} actions={actions} key={'approval-button'} />
-  )
+  ) : null
 
   const updatedFooterItems = [
     followButton,
@@ -592,8 +628,8 @@ export const MainProfileCard: FC<MainProfileCardProps> = ({
     header,
     description,
     // approvalInfo,
-    footer,
     ...(mainColumnItems ?? []),
+    footer,
   ].filter((item): item is AddonItem | JSX.Element => !!item)
 
   return (

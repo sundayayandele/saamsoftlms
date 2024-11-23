@@ -14,8 +14,12 @@ import {
 } from '@moodlenet/react-app/webapp'
 import { FilterNone, Grade, PermIdentity } from '@mui/icons-material'
 import { useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import type { ProfileGetRpc } from '../../../../common/types.mjs'
-import { getProfileFollowersRoutePath } from '../../../../common/webapp-routes.mjs'
+import { reportOptionTypes } from '../../../../common/reports/consts.mjs'
+import type { ProfileGetRpc, ReportProfileData } from '../../../../common/types.mjs'
+import {
+  getProfileFollowersRoutePath,
+  getProfileFollowingRoutePath,
+} from '../../../../common/webapp-routes.mjs'
 import type { ProfileProps } from '../../../ui/exports/ui.mjs'
 import { AuthCtx } from '../../context/AuthContext.js'
 import { useProfileContext } from '../../context/ProfileContext.js'
@@ -29,7 +33,8 @@ export type ProfilePagePluginMap = {
   main_subtitleItems?: AddOnMap<AddonItemNoKey>
   main_titleItems?: AddOnMap<AddonItemNoKey>
   mainColumnItems?: AddOnMap<AddonItemNoKey>
-  sideColumnItems?: AddOnMap<AddonItemNoKey>
+  rightColumnItems?: AddOnMap<AddonItemNoKey>
+  wideColumnItems?: AddOnMap<AddonItemNoKey>
   overallCardItems?: AddOnMap<Omit<OverallCardItem, 'key'>>
 }
 
@@ -50,8 +55,10 @@ type SaveState = {
 }
 export const useProfileProps = ({
   profileKey,
+  ownContributionListLimit,
 }: {
   profileKey: string
+  ownContributionListLimit: number
 }): ProfileProps | null | undefined => {
   const showAccountApprovedSuccessAlert = false
   const { validationSchemas } = useProfileContext()
@@ -98,13 +105,19 @@ export const useProfileProps = ({
     avatar: !!upAvatarTaskCurrent,
   }))
   const toggleIsPublisher = useCallback(async () => {
-    return shell.rpc
-      .me('webapp/admin/roles/toggleIsPublisher')({ profileKey })
-      .then(
-        done =>
-          done && setProfileGetRpc(curr => curr && { ...curr, isPublisher: !curr.isPublisher }),
-      )
-  }, [profileKey])
+    return (
+      profileGetRpc &&
+      shell.rpc
+        .me('webapp/admin/roles/setIsPublisher')({
+          profileKey,
+          isPublisher: !profileGetRpc.isPublisher,
+        })
+        .then(
+          done =>
+            done && setProfileGetRpc(curr => curr && { ...curr, isPublisher: !curr.isPublisher }),
+        )
+    )
+  }, [profileKey, profileGetRpc])
   const editProfile = useCallback<ProfileProps['actions']['editProfile']>(
     async values => {
       const { aboutMe, displayName, location, organizationName, siteUrl } = values
@@ -131,18 +144,33 @@ export const useProfileProps = ({
     },
     [profileKey, updateMyLocalProfile],
   )
+  const reportProfile = useCallback(
+    (reportProfileData: ReportProfileData): void => {
+      shell.rpc.me('webapp/profile/report/:_key', { rpcId: `webapp/profile/report#${profileKey}` })(
+        { reportOptionTypeId: reportProfileData.type.id, comment: reportProfileData.comment },
+        {
+          _key: profileKey,
+        },
+      )
+    },
+    [profileKey],
+  )
 
   useEffect(() => {
     setProfileGetRpc(undefined)
     shell.rpc
-      .me('webapp/profile/:_key/get', { rpcId: `profile/get#${profileKey}` })(void 0, {
-        _key: profileKey,
-      })
+      .me('webapp/profile/:_key/get', { rpcId: `profile/get#${profileKey}` })(
+        void 0,
+        {
+          _key: profileKey,
+        },
+        { ownContributionListLimit: String(ownContributionListLimit) },
+      )
       .then(res => {
         setProfileGetRpc(res)
       })
       .catch(silentCatchAbort)
-  }, [profileKey])
+  }, [profileKey, ownContributionListLimit])
 
   const mainLayoutProps = useMainLayoutProps()
   const follow = useMyFeaturedEntity({ _key: profileKey, entityType: 'profile', feature: 'follow' })
@@ -187,6 +215,9 @@ export const useProfileProps = ({
       //     displayName: profileGetRpc.data.displayName,
       //   }),
       // ),
+      // userProgressCardProps: {
+      //   points: profileGetRpc.points,
+      // },
       access: {
         canApprove: profileGetRpc.canApprove,
         isPublisher: profileGetRpc.isPublisher,
@@ -199,9 +230,10 @@ export const useProfileProps = ({
       data: {
         userId: profileKey,
         displayName: profileGetRpc.data.displayName,
-        avatarUrl: profileGetRpc.data.avatarUrl,
-        backgroundUrl: profileGetRpc.data.backgroundUrl,
+        avatarUrl: profileGetRpc.data.avatarUrl ?? undefined,
+        backgroundUrl: profileGetRpc.data.backgroundUrl ?? undefined,
         profileHref: profileGetRpc.profileHref,
+        points: profileGetRpc.points,
         ...(upBgImageTaskCurrent
           ? {
               backgroundUrl: upBgImageTaskCurrentObjectUrl,
@@ -212,6 +244,7 @@ export const useProfileProps = ({
               avatarUrl: upAvatarTaskCurrentObjectUrl,
             }
           : {}),
+        reportOptions: reportOptionTypes,
       },
       state: {
         isPublisher: profileGetRpc.isPublisher,
@@ -221,6 +254,7 @@ export const useProfileProps = ({
         numFollowers: profileGetRpc.numFollowers,
       },
       actions: {
+        reportProfile,
         approveUser: toggleIsPublisher,
         unapproveUser: toggleIsPublisher,
         editProfile,
@@ -265,11 +299,13 @@ export const useProfileProps = ({
       resourceCardPropsList,
       collectionCardPropsList,
       mainColumnItems: plugins.getKeyedAddons('mainColumnItems'),
-      sideColumnItems: plugins.getKeyedAddons('sideColumnItems'),
+      rightColumnItems: plugins.getKeyedAddons('rightColumnItems'),
+      wideColumnItems: plugins.getKeyedAddons('wideColumnItems'),
       overallCardItems: [
         {
           Icon: PermIdentity,
           name: 'Followers',
+          className: 'followers',
           value: profileGetRpc.numFollowers,
           href: href(
             getProfileFollowersRoutePath({
@@ -278,11 +314,23 @@ export const useProfileProps = ({
             }),
           ),
         },
-        { Icon: Grade, name: 'Kudos', value: profileGetRpc.numKudos },
+        {
+          Icon: Grade,
+          name: 'Following',
+          className: 'following',
+          value: profileGetRpc.numFollowing,
+          href: href(
+            getProfileFollowingRoutePath({
+              displayName: profileGetRpc.data.displayName,
+              key: profileKey,
+            }),
+          ),
+        },
         {
           Icon: FilterNone,
           name: 'Resources',
-          value: profileGetRpc.ownKnownEntities.resources.length,
+          className: 'resources',
+          value: profileGetRpc.publishedContributions.resources,
         },
 
         ...plugins.getKeyedAddons('overallCardItems'),
@@ -307,6 +355,7 @@ export const useProfileProps = ({
     upAvatarTaskCurrentObjectUrl,
     showAccountApprovedSuccessAlert,
     follow,
+    reportProfile,
     toggleIsPublisher,
     editProfile,
     plugins,

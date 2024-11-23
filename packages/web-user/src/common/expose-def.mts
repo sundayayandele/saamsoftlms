@@ -6,18 +6,30 @@ import type {
   KnownEntityFeature,
   KnownEntityType,
   KnownFeaturedEntities,
-  Profile,
+  LeaderBoardContributor,
   ProfileGetRpc,
   ProfileSearchResultRpc,
+  ReportOptionTypeId,
   SortTypeRpc,
   UserInterests,
-  WebUserData,
+  WebUserDataRPC,
 } from './types.mjs'
 import type { ValidationsConfig } from './validationSchema.mjs'
 export type { EntityIdentifier } from '@moodlenet/system-entities/common'
 
 export type WebappConfigsRpc = { validations: ValidationsConfig }
-export type EditProfileDataRpc = Omit<Profile, 'avatarUrl' | 'backgroundUrl' | '_key'>
+export type EditProfileDataRpc = {
+  displayName: string
+  aboutMe: string
+  organizationName: string | undefined | null
+  location: string | undefined | null
+  siteUrl: string | undefined | null
+}
+
+export type LeaderBoardData = {
+  contributors: LeaderBoardContributor[]
+}
+
 export type WebUserExposeType = PkgExposeDef<{
   rpc: {
     'webapp/get-configs'(): Promise<WebappConfigsRpc>
@@ -27,7 +39,12 @@ export type WebUserExposeType = PkgExposeDef<{
       body: { editData: EditProfileDataRpc },
       params: { _key: string },
     ): Promise<void>
-    'webapp/profile/:_key/get'(body: void, params: { _key: string }): Promise<ProfileGetRpc | null>
+    'webapp/profile/leader-board-data'(): Promise<LeaderBoardData>
+    'webapp/profile/:_key/get'(
+      body: void,
+      params: { _key: string },
+      query: { ownContributionListLimit: string | undefined },
+    ): Promise<ProfileGetRpc | null>
     'webapp/upload-profile-background/:_key'(
       body: { file: [RpcFile | null | undefined] },
       params: { _key: string },
@@ -64,6 +81,7 @@ export type WebUserExposeType = PkgExposeDef<{
         // sortType?: SortTypeRpc
         after?: string
         limit?: number
+        mode?: 'reverse'
       },
     ): Promise<{ profiles: { _key: string }[] }>
     'webapp/all-my-featured-entities'(): Promise<null | {
@@ -101,19 +119,49 @@ export type WebUserExposeType = PkgExposeDef<{
       },
     ): Promise<ProfileSearchResultRpc>
     'webapp/web-user/delete-account-request'(): Promise<void>
-    'webapp/admin/general/set-org-data'(body: {
-      orgData: OrganizationData
-    }): Promise<{ valid: boolean }>
-    'webapp/react-app/get-org-data'(): Promise<{ data: OrganizationData }>
+    'webapp/admin/general/set-org-data'(body: { rawData: OrganizationData }): Promise<{
+      data: OrganizationData
+      rawData: OrganizationData
+    }>
+    'webapp/react-app/get-org-data'(): Promise<{
+      data: OrganizationData
+      rawData: OrganizationData
+    }>
     'webapp/react-app/get-appearance'(): Promise<{ data: AppearanceData }>
     'webapp/admin/general/set-appearance'(body: {
       appearanceData: AppearanceData
     }): Promise<{ valid: boolean }>
-    'webapp/admin/packages/update-all-pkgs'(): Promise<{ updatePkgs: Record<string, string> }>
-    'webapp/admin/roles/searchUsers'(body: { search: string }): Promise<WebUserData[]>
-    'webapp/admin/roles/toggleIsAdmin'(
-      body: { profileKey: string } | { userKey: string },
+    // 'webapp/admin/packages/update-all-pkgs'(): Promise<{ updatePkgs: Record<string, string> }>
+    'webapp/admin/roles/searchUsers'(body: {
+      search: string
+      sortType?: AdminSearchUserSortType
+      forReports?: boolean
+      filterNoFlag?: boolean
+    }): Promise<WebUserDataRPC[]>
+    'webapp/admin/roles/setIsAdmin'(
+      body: { isAdmin: boolean } & ({ profileKey: string } | { userKey: string }),
     ): Promise<boolean>
-    'webapp/admin/roles/toggleIsPublisher'(body: { profileKey: string }): Promise<boolean>
+    'webapp/admin/roles/setIsPublisher'(body: {
+      profileKey: string
+      isPublisher: boolean
+    }): Promise<boolean>
+    //report
+    'webapp/admin/moderation/___delete-user/:webUserKey'(
+      body: null,
+      params: { webUserKey: string },
+    ): Promise<unknown>
+    'webapp/admin/moderation/ignore-user-reports/:webUserKey'(
+      body: null,
+      params: { webUserKey: string },
+    ): Promise<unknown>
+    'webapp/profile/report/:_key'(
+      body: {
+        reportOptionTypeId: ReportOptionTypeId
+        comment: string | undefined
+      },
+      params: { _key: string },
+    ): Promise<{ done: boolean }>
   }
 }>
+
+export type AdminSearchUserSortType = 'DisplayName' | 'Flags' | 'LastFlag' | 'MainReason' | 'Status'

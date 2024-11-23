@@ -36,46 +36,48 @@ export const Browser: FC<BrowserProps> = ({ mainColumnItems, title, showFilters 
   const filterByItemType = useMemo(() => {
     return mainColumnItems
       ? sortAddonItems(
-          mainColumnItems.map(e => {
-            // if (e.numElements === 0) return null
-            const isCurrent = e.key === currentMainFilter
+          mainColumnItems
+            .sort((a, b) => (a.position ?? Infinity) - (b.position ?? Infinity))
+            .map(e => {
+              // if (e.numElements === 0) return null
+              const isCurrent = e.key === currentMainFilter
 
-            const options = mainColumnItems.map(i => {
-              return { label: i.name, value: i.key.toString() }
-            })
-            options.push({ label: 'All', value: 'all' })
+              const options = mainColumnItems.map(i => {
+                return { label: i.name, value: i.key.toString() }
+              })
+              options.push({ label: 'All', value: 'all' })
 
-            return isCurrent || !currentMainFilter ? (
-              isCurrent ? (
-                <SimpleDropdown
-                  className={`content-type-filter`}
-                  options={options}
-                  selected={[e.key.toString()]}
-                  label={e.name}
-                  onClick={(key: string | number) => {
-                    setCurrentMainFilter(key === 'all' ? undefined : key)
-                  }}
-                />
-              ) : (
-                <SecondaryButton
-                  key={e.key}
-                  className={`content-type-filter filter-element ${isCurrent ? 'selected' : ''}`}
-                  onClick={() => {
-                    setCurrentMainFilter(e.key)
-                  }}
-                  color="grey"
-                >
-                  <span>{e.name}</span>
-                </SecondaryButton>
-              )
-            ) : null
-          }),
+              return isCurrent || !currentMainFilter ? (
+                isCurrent ? (
+                  <SimpleDropdown
+                    className={`content-type-filter`}
+                    options={options}
+                    selected={[e.key.toString()]}
+                    label={e.name}
+                    onClick={(key: string | number) => {
+                      setCurrentMainFilter(key === 'all' ? undefined : key)
+                    }}
+                  />
+                ) : (
+                  <SecondaryButton
+                    key={e.key}
+                    className={`content-type-filter filter-element ${isCurrent ? 'selected' : ''}`}
+                    onClick={() => {
+                      setCurrentMainFilter(e.key)
+                    }}
+                    color="grey"
+                  >
+                    <span>{e.name}</span>
+                  </SecondaryButton>
+                )
+              ) : null
+            }),
         )
       : []
   }, [mainColumnItems, currentMainFilter])
 
   useEffect(() => {
-    mainColumnItems?.map(e => e.key === currentMainFilter && setCurrentFilters(e.filters))
+    mainColumnItems.map(e => e.key === currentMainFilter && setCurrentFilters(e.filters))
   }, [currentMainFilter, mainColumnItems])
 
   const filters =
@@ -102,17 +104,43 @@ export const Browser: FC<BrowserProps> = ({ mainColumnItems, title, showFilters 
         {/* <div className="separator" /> */}
         {filters}
         {/* <div className="separator"></div>
-        <SecondaryButton className={`filter-element`} color="grey">
-          All filters
-        </SecondaryButton> */}
+      <SecondaryButton className={`filter-element`} color="grey">
+        All filters
+      </SecondaryButton> */}
         {/* <TertiaryButton onClick={() => setCurrentMainFilter(undefined)}>Reset</TertiaryButton> */}
       </>
     ) : null
 
+  const filterBarRef = useRef<HTMLDivElement>(null)
+  const [filterBarHeigh, setFilterBarHeigh] = useState(0)
+
+  useEffect(() => {
+    // Function to update padding based on the div's height
+    const updateHeight = () => {
+      if (filterBarRef.current) {
+        setFilterBarHeigh(filterBarRef.current.clientHeight)
+      }
+    }
+    // Create an observer instance
+    const observer = new MutationObserver(updateHeight)
+
+    // Configuration of the observer
+    const config = { attributes: true, childList: true, subtree: true }
+
+    // Start observing the target node
+    if (filterBarRef.current) {
+      observer.observe(filterBarRef.current, config)
+      updateHeight() // Initial update
+    }
+
+    // Disconnect the observer on cleanup
+    return () => observer.disconnect()
+  }, [])
+
   return (
     <div className={`browser ${showFilters ? 'show-filters' : ''}`}>
       {showFilters && (
-        <div className="filter-bar">
+        <div className="filter-bar" ref={filterBarRef}>
           <div className="filter-bar-content">
             <>
               {filterByItemType.filter(e => !!e)}
@@ -122,7 +150,7 @@ export const Browser: FC<BrowserProps> = ({ mainColumnItems, title, showFilters 
           </div>
         </div>
       )}
-      <div className="content">
+      <div className="content" style={{ paddingTop: filterBarHeigh }}>
         <div className={`main-column ${currentMainFilter ? 'full-width' : ''}`} ref={mainColumnRef}>
           {title && <div className="title">{title}</div>}
           {useMemo(

@@ -8,24 +8,28 @@ import './Modal.scss'
 
 export type ModalProps = {
   title?: string
-  actions?: React.ReactNode
+  actions?: ReactNode
   style?: React.CSSProperties
   className?: string
   closeButton?: boolean
   children?: ReactNode
+  contentRef?: React.RefObject<HTMLDivElement>
+  onPressEnter?: () => void
   onClose?: () => void
 }
 
 const stopPropagation = (event: React.MouseEvent) => event.stopPropagation()
 
 export const Modal: React.FC<ModalProps> = ({
-  onClose,
   title,
   actions,
   style,
   className,
   closeButton,
   children,
+  contentRef,
+  onClose,
+  onPressEnter,
 }) => {
   const handleonClose = useCallback(
     (event: React.MouseEvent) => {
@@ -40,10 +44,13 @@ export const Modal: React.FC<ModalProps> = ({
       if (key === 'Escape') {
         onClose && onClose()
       }
+      if (key === 'Enter') {
+        onPressEnter && onPressEnter()
+      }
     }
     document.addEventListener('keyup', handleEvent)
     return () => document.removeEventListener('keyup', handleEvent)
-  }, [onClose])
+  }, [onClose, onPressEnter])
   return createPortal(
     <div className="modal-portal">
       <div className={`modal-container ${className}`} onMouseDown={handleonClose}>
@@ -54,7 +61,7 @@ export const Modal: React.FC<ModalProps> = ({
         >
           {(title || closeButton) && (
             <div className="modal-header">
-              {title && <div className="title">{title}</div>}
+              {<div className="title">{title ?? ''}</div>}
               {closeButton && (
                 <div className="close-button" onClick={handleonClose}>
                   <CloseRoundedIcon />
@@ -62,7 +69,11 @@ export const Modal: React.FC<ModalProps> = ({
               )}
             </div>
           )}
-          {children && <div className="content">{children}</div>}
+          {children && (
+            <div className="content" ref={contentRef}>
+              {children}
+            </div>
+          )}
           {actions && <div className="actions">{actions}</div>}
         </Card>
       </div>

@@ -7,6 +7,7 @@ import { useEffect } from 'react'
 import { overrideDeep } from '@moodlenet/component-library/common'
 import { href } from '@moodlenet/react-app/common'
 import { SignupPropsStories } from '@moodlenet/simple-email-auth/stories'
+import type { SignupProps as SigupEmailProps } from '@moodlenet/simple-email-auth/ui'
 import { SignupIcon, SignupPanel } from '@moodlenet/simple-email-auth/ui'
 import { MinimalisticAccessButtonsStories } from '@moodlenet/web-user/stories'
 import type { SignupProps } from '@moodlenet/web-user/ui'
@@ -34,6 +35,7 @@ const meta: ComponentMeta<typeof Signup> = {
 
 export const SignupStoryProps = (
   overrides?: PartialDeep<SignupProps>,
+  signupPanel?: PartialDeep<SigupEmailProps>,
 ): // override?: {
 // props?: Partial<SignupProps>
 // formValues?: Partial<SignupFormValues>
@@ -45,14 +47,14 @@ SignupProps => {
       signupItems: [
         {
           Icon: SignupIcon,
-          Panel: () => <SignupPanel {...SignupPropsStories.useSignupPanelProps()} />,
+          Panel: () => <SignupPanel {...SignupPropsStories.useSignupPanelProps(signupPanel)} />,
           key: 'email-auth',
         },
         // { Icon: PrimaryButton, Panel: FileUploader },
         // { Icon: PassportAuth.Icon, Panel: PassportAuth.Panel },
       ],
       headerProps: MinimalisticHeaderStories.MinimalisticHeaderStoryProps(
-        MinimalisticAccessButtonsStories.getAccesMinimalisticHeaderItems({
+        MinimalisticAccessButtonsStories.getMinimalisticAccessHeaderItems({
           loginHref: href('Pages/Access/Login/Default'),
           signupHref: href('Pages/Access/SignUp/Default'),
           showLearnMoreButton: true,
@@ -62,6 +64,7 @@ SignupProps => {
       ),
       footerProps: FooterStoryProps,
       loginHref: href('Pages/Access/Login/Default'),
+      userAgreementHref: href('Pages/Policies/UserAgreement/Default'),
       // accessHeaderProps: AccessHeaderStoryProps,
       // form: useFormik<SignupFormValues>({
       //   validationSchema,
@@ -90,6 +93,12 @@ SignupProps => {
 
 export const Default = () => {
   const props = SignupStoryProps()
+  return <Signup {...props} />
+}
+
+export const EmailSent = () => {
+  const props = SignupStoryProps({}, { emailSent: true })
+
   return <Signup {...props} />
 }
 

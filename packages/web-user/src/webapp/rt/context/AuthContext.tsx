@@ -4,7 +4,11 @@ import type { FC, PropsWithChildren } from 'react'
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import type { Profile } from '../../../common/exports.mjs'
-import { WEB_USER_SESSION_TOKEN_COOKIE_NAME } from '../../../common/exports.mjs'
+import {
+  SESSION_CHANGE_REDIRECT_Q_NAME,
+  WEB_USER_SESSION_TOKEN_COOKIE_NAME,
+  useLoginPageRoutePathRedirectToCurrent,
+} from '../../../common/exports.mjs'
 import defaultAvatarUrl from '../../ui/assets/img/default-avatar.svg'
 import rootAvatarUrl from '../../ui/assets/img/root-avatar.svg'
 import { shell } from '../shell.mjs'
@@ -120,8 +124,11 @@ export function useAuthCtxValue() {
   useEffect(() => {
     sessionTokenCookieChanged = () => {
       fetchClientSessionDataRpc().finally(() => {
-        const redirectTo = new URLSearchParams(loc.search).get(REDIRECT_Q_NAME)
-        nav(redirectTo || '/')
+        const redirectTo = new URLSearchParams(loc.search).get(SESSION_CHANGE_REDIRECT_Q_NAME)
+        if (!redirectTo || redirectTo === '.') {
+          return
+        }
+        nav(redirectTo)
       })
     }
   }, [fetchClientSessionDataRpc, loc.search, loc.state, nav])
@@ -177,22 +184,25 @@ wrapFetch((url, reqInit, next) => {
   })
 })
 
-const REDIRECT_Q_NAME = 'redirectTo'
-export function useNeedsWebUserLogin(): {
+export function useNeedsWebUserLogin(opts?: { disable?: boolean }): {
   isAdmin: boolean
   myProfile: Profile
 } | null {
   const nav = useNavigate()
-  const loc = useLocation()
+  const loginRedirectCurrentPath = useLoginPageRoutePathRedirectToCurrent()
   const authCtx = useContext(AuthCtx)
   useEffect(() => {
-    if (authCtx.isAuthenticated && authCtx.clientSessionData.myProfile) {
+    if (opts?.disable || (authCtx.isAuthenticated && authCtx.clientSessionData.myProfile)) {
       return
     }
-    const usp = new URLSearchParams()
-    usp.append(REDIRECT_Q_NAME, `${loc.pathname}${loc.search}${loc.hash}`)
-    nav(`/login?${usp.toString()}`)
-  }, [authCtx.clientSessionData?.myProfile, authCtx.isAuthenticated, loc, nav])
+    nav(loginRedirectCurrentPath)
+  }, [
+    opts?.disable,
+    authCtx.clientSessionData?.myProfile,
+    authCtx.isAuthenticated,
+    nav,
+    loginRedirectCurrentPath,
+  ])
   return authCtx.clientSessionData?.myProfile
     ? {
         isAdmin: authCtx.clientSessionData.isAdmin,

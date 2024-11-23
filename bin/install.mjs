@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import execa from 'execa'
+import { execa } from 'execa'
 import { open, writeFile } from 'fs/promises'
 import * as jose from 'jose'
 import { resolve } from 'path'
@@ -70,7 +70,7 @@ async function defaultConfigJson() {
     pkgs: {
       '@moodlenet/core': {
         baseFsFolder: resolve(mnDevDir, 'fs'),
-        instanceDomain: 'http://localhost:8080',
+        instanceDomain: 'http://localhost:3000',
         npmRegistry,
         mainLogger: {
           consoleLevel: 'debug',
@@ -112,7 +112,7 @@ async function defaultConfigJson() {
       },
       '@moodlenet/react-app': {
         noWebappServer: true,
-        noWebappBuilder: true,
+        noWebappBuilder: false,
         defaultImageUploadMaxSize: '5MB',
       },
     },

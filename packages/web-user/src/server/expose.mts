@@ -1,5 +1,6 @@
 import type { PkgExposeDef } from '@moodlenet/core'
-import { npm, RpcNext, RpcStatus } from '@moodlenet/core'
+import { RpcNext, RpcStatus } from '@moodlenet/core'
+import { getCurrentHttpCtx } from '@moodlenet/http-server/server'
 import { getOrgData, setOrgData } from '@moodlenet/organization/server'
 import { href } from '@moodlenet/react-app/common'
 import {
@@ -8,51 +9,71 @@ import {
   getWebappUrl,
   setAppearance,
 } from '@moodlenet/react-app/server'
-import type { EntityDocument } from '@moodlenet/system-entities/server'
+import type { EntityDocument, EntityFullDocument } from '@moodlenet/system-entities/server'
 import assert from 'assert'
 import type { SchemaOf } from 'yup'
 import { array, object, string } from 'yup'
+import { getReportOptionType } from '../common/exports.mjs'
 import type { WebUserExposeType } from '../common/expose-def.mjs'
+import { getUserStatus } from '../common/rpcMappings.mjs'
 import type {
   ClientSessionDataRpc,
+  LeaderBoardContributor,
   Profile,
   ProfileGetRpc,
   UserInterests,
-  WebUserData,
+  UserReportRPC,
+  UserReporterRPC,
+  UserStatusChangeRPC,
+  WebUserDataRPC,
 } from '../common/types.mjs'
-import { getProfileHomePageRoutePath } from '../common/webapp-routes.mjs'
-import { profileValidationSchema, validationsConfig } from './env.mjs'
+import {
+  DELETE_ACCOUNT_SUCCESS_PAGE_PATH,
+  SESSION_CHANGE_REDIRECT_Q_NAME,
+  getProfileHomePageRoutePath,
+} from '../common/webapp-routes.mjs'
+import { messageFormValidationSchema, profileValidationSchema, validationsConfig } from './env.mjs'
+import { WebUserCollection } from './init/arangodb.mjs'
 import { publicFilesHttp } from './init/fs.mjs'
 import { shell } from './shell.mjs'
 import {
+  deleteWebUserAccountConfirmedByToken,
+  deleteWebUserAccountNow,
+} from './srv/delete-account.mjs'
+import {
   isAllowedKnownEntityFeature,
   reduceToKnownFeaturedEntities,
-} from './srv/known-features.mjs'
+} from './srv/known-entity-types.mjs'
 import {
+  changeProfilePublisherPerm,
   editMyProfileInterests,
   editProfile,
   entityFeatureAction,
-  getEntityFeatureCount,
+  filterUserUnaccessibleEntities,
   getEntityFeatureProfiles,
+  getEntityFeaturesCount,
   getLandingPageList,
   getProfileOwnKnownEntities,
+  getProfilePointLeaders,
   getProfileRecord,
   getValidations,
+  reportUser,
   searchProfiles,
-  sendMessageToProfile as sendMessageToProfileIntent,
+  sendMessageToProfileIntent,
   setProfileAvatar,
   setProfileBackgroundImage,
-  setProfilePublisherFlag,
 } from './srv/profile.mjs'
 import {
   currentWebUserDeletionAccountRequest,
-  deleteWebUserAccountConfirmedByToken,
   getCurrentProfileIds,
+  getCurrentWebUserIds,
   getWebUser,
+  ignoreUserReports,
   loginAsRoot,
-  searchUsers,
+  searchUsersForModeration,
   sendWebUserTokenCookie,
-  toggleWebUserIsAdmin,
+  setWebUserIsAdmin,
+  signWebUserJwt,
   verifyCurrentTokenCtx,
 } from './srv/web-user.mjs'
 import type { ProfileDataType } from './types.mjs'
@@ -111,6 +132,25 @@ export const expose = await shell.expose<WebUserExposeType & ServiceRpc>({
           isRoot: false,
           myProfile: { ...myProfile, webUserKey: webUser._key },
         }
+        const jwtToken = await signWebUserJwt({
+          isRoot: false,
+          profile: {
+            _id: profileRecord.entity._id,
+            _key: profileRecord.entity._key,
+            publisher: profileRecord.entity.publisher,
+          },
+          webUser: {
+            _key: webUser._key,
+            displayName: webUser.displayName,
+            isAdmin: webUser.isAdmin,
+          },
+        })
+        sendWebUserTokenCookie(jwtToken)
+        WebUserCollection.update(
+          { _key: webUser._key },
+          { lastVisit: { at: new Date().toISOString(), inactiveNotificationSentAt: null } },
+        )
+
         return clientSessionDataRpc
       },
     },
@@ -118,9 +158,38 @@ export const expose = await shell.expose<WebUserExposeType & ServiceRpc>({
       guard: () => void 0,
       fn: ({ rootPassword }) => loginAsRoot(rootPassword),
     },
+    'webapp/profile/leader-board-data': {
+      async guard() {
+        return true
+      },
+      async fn() {
+        const profilePointLeaders: EntityFullDocument<ProfileDataType>[] =
+          await getProfilePointLeaders()
+        const contributors = profilePointLeaders.map<LeaderBoardContributor>(profileRecord => {
+          const profileHomePagePath = getProfileHomePageRoutePath({
+            _key: profileRecord._key,
+            displayName: profileRecord.displayName,
+          })
+
+          const profileData = profileDoc2Profile(profileRecord)
+          const leaderBoardContributor: LeaderBoardContributor = {
+            avatarUrl: profileData.avatarUrl ?? undefined,
+            displayName: profileData.displayName,
+            points: profileRecord.points ?? 0,
+            profileHref: href(profileHomePagePath),
+            //subject: profileData.subject,
+          }
+          return leaderBoardContributor
+        })
+        return { contributors }
+      },
+    },
     'webapp/profile/:_key/edit': {
-      guard: _ => {
-        _.editData = profileValidationSchema.validateSync(_?.editData, { stripUnknown: true })
+      async guard(_) {
+        const validatedData = await profileValidationSchema.validate(_?.editData, {
+          stripUnknown: true,
+        })
+        _.editData = validatedData
       },
       async fn({ editData }, { _key }) {
         const patchRecord = await editProfile(_key, editData)
@@ -131,8 +200,15 @@ export const expose = await shell.expose<WebUserExposeType & ServiceRpc>({
     },
     'webapp/profile/:_key/get': {
       guard: () => void 0,
-      async fn(_, { _key }) {
-        const profileRecord = await getProfileRecord(_key, { projectAccess: ['u'] })
+      async fn(_, { _key }, q) {
+        const ownContribLimit =
+          q?.ownContributionListLimit === undefined
+            ? undefined
+            : parseInt(q.ownContributionListLimit) || 0
+        const profileRecord = await getProfileRecord(_key, {
+          filterOutUnaccessibleFeatured: true,
+          projectAccess: ['u'],
+        })
         if (!profileRecord) {
           return null
         }
@@ -140,22 +216,30 @@ export const expose = await shell.expose<WebUserExposeType & ServiceRpc>({
 
         const [collections, resources, currentProfileIds, currToken, numFollowers] =
           await Promise.all([
-            getProfileOwnKnownEntities({
-              knownEntity: 'collection',
-              profileKey: _key,
-            }).then(_ => _.map(({ entity: { _key } }) => ({ _key }))),
+            !ownContribLimit
+              ? []
+              : getProfileOwnKnownEntities({
+                  knownEntity: 'collection',
+                  profileKey: _key,
+                  limit: ownContribLimit,
+                }).then(_ => _.map(({ entity: { _key } }) => ({ _key }))),
 
-            getProfileOwnKnownEntities({
-              knownEntity: 'resource',
-              profileKey: _key,
-            }).then(_ => _.map(({ entity: { _key } }) => ({ _key }))),
+            !ownContribLimit
+              ? []
+              : getProfileOwnKnownEntities({
+                  knownEntity: 'resource',
+                  profileKey: _key,
+                  limit: ownContribLimit,
+                }).then(_ => _.map(({ entity: { _key } }) => ({ _key }))),
             getCurrentProfileIds(),
             verifyCurrentTokenCtx(),
-            getEntityFeatureCount({ _key, entityType: 'profile', feature: 'follow' }).then(
+            getEntityFeaturesCount({ _key, entityType: 'profile', feature: 'follow' }).then(
               _ => _?.count ?? 0,
             ),
           ])
-
+        const numFollowing = profileRecord.entity.knownFeaturedEntities.filter(
+          ({ entityType, feature }) => feature === 'follow' && entityType === 'profile',
+        ).length
         const profileHomePagePath = getProfileHomePageRoutePath({
           _key,
           displayName: profileRecord.entity.displayName,
@@ -170,10 +254,12 @@ export const expose = await shell.expose<WebUserExposeType & ServiceRpc>({
           canEdit: !!profileRecord.access.u,
           canFollow: !!currentProfileIds && currentProfileIds._key !== profileRecord.entity._key,
           numFollowers,
-          numKudos: profileRecord.entity.kudos,
+          numFollowing,
+          points: profileRecord.entity.points ?? 0,
           profileHref: href(profileHomePagePath),
           profileUrl: getWebappUrl(profileHomePagePath),
           data,
+          publishedContributions: profileRecord.entity.publishedContributions,
           ownKnownEntities: {
             collections,
             resources,
@@ -191,7 +277,7 @@ export const expose = await shell.expose<WebUserExposeType & ServiceRpc>({
           { image: body?.file?.[0] },
           { stripUnknown: true },
         )
-        body.file = [validatedImageOrNullish]
+        body.file = [validatedImageOrNullish?.image]
       },
       async fn({ file: [uploadedRpcFile] }, { _key }) {
         const got = await getProfileRecord(_key, { projectAccess: ['u'] })
@@ -222,7 +308,7 @@ export const expose = await shell.expose<WebUserExposeType & ServiceRpc>({
           { image: body?.file?.[0] },
           { stripUnknown: true },
         )
-        body.file = [validatedImageOrNullish]
+        body.file = [validatedImageOrNullish?.image]
       },
       async fn({ file: [uploadedRpcFile] }, { _key }) {
         const got = await getProfileRecord(_key, { projectAccess: ['u'] })
@@ -253,7 +339,7 @@ export const expose = await shell.expose<WebUserExposeType & ServiceRpc>({
           if (!isAllowedKnownEntityFeature({ entityType, feature })) {
             return { count: 0 }
           }
-          const countRes = await getEntityFeatureCount({ _key, entityType, feature })
+          const countRes = await getEntityFeaturesCount({ _key, entityType, feature })
           // shell.log('debug', [countRes?.count ?? 0, _key, entityType, feature])
 
           return countRes ?? { count: 0 }
@@ -261,15 +347,43 @@ export const expose = await shell.expose<WebUserExposeType & ServiceRpc>({
       },
     'webapp/feature-entity/profiles/:feature(follow|like)/:entityType(profile|collection|resource|subject)/:_key':
       {
-        guard: () => void 0,
-        async fn(_, { _key, entityType, feature }, paging) {
+        guard: (_b, _p, q) => {
+          return (
+            (q?.limit === undefined || parseInt(q.limit) > 0) &&
+            (q?.mode === undefined || q.mode === 'reverse') &&
+            (q?.after === undefined || q.after === '')
+          )
+        },
+        async fn(_, { _key, entityType, feature }, { after, limit, mode }) {
           if (!isAllowedKnownEntityFeature({ entityType, feature })) {
             return { profiles: [] }
           }
-          const cursor = await getEntityFeatureProfiles({ _key, entityType, feature, paging })
-          const all = await cursor.all()
-          return {
-            profiles: all.map(({ entity: { _key } }) => ({ _key })),
+
+          if (mode === 'reverse') {
+            const cursor = await getEntityFeatureProfiles({
+              _key,
+              entityType,
+              feature,
+              paging: { after, limit },
+            })
+            const allItems = await cursor.all()
+
+            const fileredItems = await filterUserUnaccessibleEntities(
+              allItems.map(({ entity: { _key } }) => ({ _key, entityType })),
+            )
+            return {
+              profiles: fileredItems.map(({ _key }) => ({ _key })),
+            }
+          } else {
+            const profile = await getProfileRecord(_key, { filterOutUnaccessibleFeatured: true })
+            if (!profile) {
+              return { profiles: [] }
+            }
+            return {
+              profiles: profile.entity.knownFeaturedEntities
+                .filter(item => item.feature === feature && item.entityType === entityType)
+                .map(({ _key }) => ({ _key })),
+            }
           }
         },
       },
@@ -280,7 +394,9 @@ export const expose = await shell.expose<WebUserExposeType & ServiceRpc>({
         if (!myProfileIds) {
           return null
         }
-        const profileRec = await getProfileRecord(myProfileIds._key)
+        const profileRec = await getProfileRecord(myProfileIds._key, {
+          filterOutUnaccessibleFeatured: true,
+        })
         if (!profileRec) {
           return null
         }
@@ -313,6 +429,22 @@ export const expose = await shell.expose<WebUserExposeType & ServiceRpc>({
         }
       },
     },
+    'webapp/profile/report/:_key': {
+      guard: () => void 0,
+      async fn({ comment = '', reportOptionTypeId }, { _key }) {
+        const currWebUserIds = await getCurrentWebUserIds()
+        if (!currWebUserIds) {
+          throw RpcStatus('Unauthorized')
+        }
+        const { done } = await reportUser({
+          profileKey: _key,
+          reportTypeId: reportOptionTypeId,
+          comment,
+          reporterWebUserKey: currWebUserIds._key,
+        })
+        return { done }
+      },
+    },
     'webapp/my-interests/save': {
       guard: body => {
         const schema: SchemaOf<UserInterests> = object({
@@ -325,18 +457,25 @@ export const expose = await shell.expose<WebUserExposeType & ServiceRpc>({
         body.interests = interests
       },
       async fn({ interests }) {
-        return editMyProfileInterests({ items: interests })
+        const result = await editMyProfileInterests({ items: interests })
+        return result && !!result
       },
     },
     'webapp/my-interests/use-as-default-search-filters': {
       guard: body => typeof body.use === 'boolean',
       async fn({ use }) {
-        return editMyProfileInterests({ asDefaultFilters: use })
+        const result = await editMyProfileInterests({ asDefaultFilters: use })
+        return result && !!result
       },
     },
     'webapp/send-message-to-user/:profileKey': {
-      //@ALE TODO
-      guard: () => void 0,
+      guard: _ => {
+        const validatedMsgObj = messageFormValidationSchema.validateSync(
+          { msg: _.message },
+          { stripUnknown: true },
+        )
+        _.message = validatedMsgObj.msg
+      },
       async fn({ message }, { profileKey }) {
         sendMessageToProfileIntent({ message, profileKey })
       },
@@ -392,15 +531,22 @@ export const expose = await shell.expose<WebUserExposeType & ServiceRpc>({
         if (!result) {
           throw RpcStatus('Unauthorized')
         }
-        if (result.status === 'done') {
-          return
+        if (result.status !== 'done') {
+          throw RpcStatus('Unprocessable Entity', result.status)
         }
-        throw RpcStatus('Unprocessable Entity', result.status)
+        // TODO: should be something managed by http-server pkg
+        getCurrentHttpCtx()?.response.redirect(
+          getWebappUrl(`${DELETE_ACCOUNT_SUCCESS_PAGE_PATH}?${SESSION_CHANGE_REDIRECT_Q_NAME}=.`),
+        )
       },
     },
     'webapp/react-app/get-org-data': {
       guard: () => void 0,
       fn: getOrgData,
+    },
+    'webapp/admin/general/set-org-data': {
+      guard: () => void 0,
+      fn: setOrgData,
     },
     'webapp/react-app/get-appearance': {
       guard: () => void 0,
@@ -410,7 +556,7 @@ export const expose = await shell.expose<WebUserExposeType & ServiceRpc>({
       guard: () => void 0,
       fn: async () => {
         const _ = await betterTokenContext()
-        if (!_.isRootOrAdmin) {
+        if (!_.isRootOrAdminOrPkg) {
           throw RpcStatus('Unauthorized')
         }
         throw RpcNext()
@@ -418,66 +564,124 @@ export const expose = await shell.expose<WebUserExposeType & ServiceRpc>({
     },
     'webapp/admin/roles/searchUsers': {
       guard: () => void 0,
-      async fn({ search }) {
-        const users_and_profiles = await searchUsers(search)
-        const webUsers = Promise.all(
-          users_and_profiles.map(user => {
-            return getProfileRecord(user.profileKey).then(profile => {
-              assert(
-                profile,
-                `RPC 'webapp/admin/roles/searchUsers': found user but not profile! (webUserKey:${user._key} | profileKey:${user.profileKey})`,
-              )
+      async fn({
+        filterNoFlag = false,
+        search,
+        forReports = false,
+        sortType = forReports ? 'Flags' : 'Status',
+      }) {
+        const users_and_profiles = await searchUsersForModeration({
+          fetchReporters: forReports,
+          searchString: search,
+          sortType,
+          filterNoFlag,
+        })
+        const webUsers = users_and_profiles.map(user => {
+          const reports = user.moderation.reports.items.map((_, index) => {
+            const { comment, date, reportTypeId, reporter } =
+              // HACK: doing this because items.map() type inference looses `reporter` property from the mixed type WebUserSearchType
+              // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+              user.moderation.reports.items[index]!
 
-              const webUserData: WebUserData = {
-                _key: user._key,
-                isAdmin: user.isAdmin,
-                name: user.displayName,
-                isPublisher: profile.entity.publisher,
-                profileKey: user.profileKey,
-                profileHomePath: getProfileHomePageRoutePath({
-                  _key: profile.entity._key,
-                  displayName: profile.entity.displayName,
-                }),
-                //@BRU actually email *could* not be defined for a web-user,
-                // using our email authentication it will always be indeed..
-                // but with some other auth system it may not
-                // indeed a web user would need to have at least 1 contact/message/notification method
-                // be it an email or something else ...
-                email: user.contacts.email ?? 'N/A',
+            const userReport: UserReportRPC = {
+              date,
+              reason: { comment, type: getReportOptionType(reportTypeId) },
+              user: {
+                displayName: reporter?.displayName || 'unknown',
+                email: reporter?.contacts.email || 'unknown',
+                profileKey: reporter?.profileKey || 'unknown',
+              },
+            }
+            return userReport
+          })
+          const statusHistory: UserStatusChangeRPC[] = user.moderation.status.history.map(
+            (_, index) => {
+              const { date, status, reporter } =
+                // HACK: doing this because history.map() type inference looses `reporter` property from the mixed type WebUserSearchType
+                // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                user.moderation.status.history[index]!
+
+              const userChangedStatus: UserReporterRPC = {
+                displayName: reporter?.displayName || 'unknown',
+                email: reporter?.contacts.email || 'unknown',
+                profileKey: reporter?.profileKey || 'unknown',
               }
-              return webUserData
-            })
-          }),
-        )
+              const userStatusChange: UserStatusChangeRPC = { date, status, userChangedStatus }
+              return userStatusChange
+            },
+          )
+          const mainReportReason = user.moderation.reports.mainReasonName ?? undefined
+          const webUserData: WebUserDataRPC = {
+            currentStatus: getUserStatus(user),
+            reports,
+            statusHistory,
+            mainReportReason,
+            _key: user._key,
+            isAdmin: user.isAdmin,
+            name: user.displayName || 'no name',
+            isPublisher: user.publisher,
+            profileKey: user.profileKey,
+            profileHomePath: getProfileHomePageRoutePath({
+              _key: user.profileKey,
+              displayName: user.displayName,
+            }),
+            //@BRU actually email *could* not be defined for a web-user,
+            // using our email authentication it will always be indeed..
+            // but with some other auth system it may not
+            // indeed a web user would need to have at least 1 contact/message/notification method
+            // be it an email or something else ...
+            email: user.contacts.email ?? 'unknown',
+          }
+          return webUserData
+        })
         return webUsers
       },
     },
-    'webapp/admin/roles/toggleIsAdmin': {
+    'webapp/admin/roles/setIsAdmin': {
       guard: () => void 0,
       async fn(by) {
-        const patchedUser = await toggleWebUserIsAdmin(by)
+        const patchedUser = await setWebUserIsAdmin(by)
         return !!patchedUser
       },
     },
-    'webapp/admin/roles/toggleIsPublisher': {
+    'webapp/admin/roles/setIsPublisher': {
       guard: () => void 0,
-      async fn({ profileKey }) {
-        const response = await setProfilePublisherFlag({ profileKey, publisher: 'toggle' })
+      async fn({ profileKey, isPublisher }) {
+        const response = await changeProfilePublisherPerm({
+          profileKey,
+          setIsPublisher: isPublisher,
+          forceUnpublish: false,
+        })
         return !!response?.ok
       },
-    },
-    'webapp/admin/general/set-org-data': {
-      guard: () => void 0,
-      fn: setOrgData,
     },
     'webapp/admin/general/set-appearance': {
       guard: () => void 0,
       fn: setAppearance,
     },
-    'webapp/admin/packages/update-all-pkgs': {
+    'webapp/admin/moderation/___delete-user/:webUserKey': {
       guard: () => void 0,
-      fn: () => npm.updateAll(),
+      async fn(_, { webUserKey }) {
+        const resp = await deleteWebUserAccountNow(webUserKey, { deletionReason: 'moderation' })
+        if (resp.status === 'not-found') {
+          throw RpcStatus('Not Found')
+        }
+        if (!(resp.status === 'done' || resp.status === 'deleting')) {
+          throw RpcStatus('Unauthorized')
+        }
+        return true
+      },
     },
+    'webapp/admin/moderation/ignore-user-reports/:webUserKey': {
+      guard: () => void 0,
+      async fn(_, { webUserKey }) {
+        return ignoreUserReports({ forWebUserKey: webUserKey })
+      },
+    },
+    // 'webapp/admin/packages/update-all-pkgs': {
+    //   guard: () => void 0,
+    //   fn: () => npm.updateAll(),
+    // },
   },
 })
 
